@@ -1,0 +1,371 @@
+# ═══════════════════════════════════════════════════════════════════════
+# ShopWave — GitHub Actions CI/CD Pipeline
+# ═══════════════════════════════════════════════════════════════════════
+
+name: ShopWave CI/CD
+
+on:
+  push:
+    branches: [main, staging, develop]
+  pull_request:
+    branches: [main, staging]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+# ─── Detect changed services ──────────────────────────────────────────────────
+jobs:
+  detect-changes:
+    name: 🔍 Detect Changed Services
+    runs-on: ubuntu-latest
+    outputs:
+      product: ${{ steps.changes.outputs.product }}
+      cart: ${{ steps.changes.outputs.cart }}
+      order: ${{ steps.changes.outputs.order }}
+      payment: ${{ steps.changes.outputs.payment }}
+      gateway: ${{ steps.changes.outputs.gateway }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changes
+        id: changes
+        run: |
+          git diff --name-only HEAD~1 HEAD > changed_files.txt || echo "." > changed_files.txt
+          cat changed_files.txt
+
+          product=$(grep -c "^services/product-service/" changed_files.txt || echo 0)
+          cart=$(grep -c "^services/cart-service/" changed_files.txt || echo 0)
+          order=$(grep -c "^services/order-service/" changed_files.txt || echo 0)
+          payment=$(grep -c "^services/payment-service/" changed_files.txt || echo 0)
+          gateway=$(grep -c "^services/api-gateway/" changed_files.txt || echo 0)
+
+          echo "product=$( [[ $product -gt 0 ]] && echo true || echo false )" >> $GITHUB_OUTPUT
+          echo "cart=$( [[ $cart -gt 0 ]] && echo true || echo false )" >> $GITHUB_OUTPUT
+          echo "order=$( [[ $order -gt 0 ]] && echo true || echo false )" >> $GITHUB_OUTPUT
+          echo "payment=$( [[ $payment -gt 0 ]] && echo true || echo false )" >> $GITHUB_OUTPUT
+          echo "gateway=$( [[ $gateway -gt 0 ]] && echo true || echo false )" >> $GITHUB_OUTPUT
+
+  # ─── Test jobs ────────────────────────────────────────────────────────────────
+  test-product:
+    name: 🧪 Test — product-service
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/product-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/product-service/requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        run: |
+          PYTHONPATH=. python -m pytest tests/ --cov=app --cov-report=xml:coverage.xml --cov-report=term-missing --junit-xml=test-results.xml -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: product-test-results
+          path: |
+            services/product-service/coverage.xml
+            services/product-service/test-results.xml
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@master
+        with:
+          projectBaseDir: services/product-service
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  test-cart:
+    name: 🧪 Test — cart-service
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/cart-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/cart-service/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Run tests
+        run: |
+          PYTHONPATH=. python -m pytest tests/ --cov=app --cov-report=xml:coverage.xml --cov-report=term-missing --junit-xml=test-results.xml -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cart-test-results
+          path: |
+            services/cart-service/coverage.xml
+            services/cart-service/test-results.xml
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@master
+        with:
+          projectBaseDir: services/cart-service
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  test-order:
+    name: 🧪 Test — order-service
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/order-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/order-service/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Run tests
+        run: |
+          PYTHONPATH=. python -m pytest tests/ --cov=app --cov-report=xml:coverage.xml --cov-report=term-missing --junit-xml=test-results.xml -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: order-test-results
+          path: |
+            services/order-service/coverage.xml
+            services/order-service/test-results.xml
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@master
+        with:
+          projectBaseDir: services/order-service
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  test-payment:
+    name: 🧪 Test — payment-service
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/payment-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/payment-service/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Run tests
+        run: |
+          PYTHONPATH=. python -m pytest tests/ --cov=app --cov-report=xml:coverage.xml --cov-report=term-missing --junit-xml=test-results.xml -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: payment-test-results
+          path: |
+            services/payment-service/coverage.xml
+            services/payment-service/test-results.xml
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@master
+        with:
+          projectBaseDir: services/payment-service
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  # ─── Slack: notify test results ───────────────────────────────────────────────
+  notify-tests:
+    name: 📣 Slack — Test Results
+    runs-on: ubuntu-latest
+    needs: [test-product, test-cart, test-order, test-payment]
+    if: always()
+    steps:
+      - name: Collect results
+        id: results
+        run: |
+          product="${{ needs.test-product.result }}"
+          cart="${{ needs.test-cart.result }}"
+          order="${{ needs.test-order.result }}"
+          payment="${{ needs.test-payment.result }}"
+
+          all_passed=true
+          failed_services=""
+
+          for entry in "product-service:$product" "cart-service:$cart" "order-service:$order" "payment-service:$payment"; do
+            name=$(echo $entry | cut -d: -f1)
+            status=$(echo $entry | cut -d: -f2)
+            if [[ "$status" == "failure" ]]; then
+              all_passed=false
+              failed_services="$failed_services $name"
+            fi
+          done
+
+          echo "all_passed=$all_passed" >> $GITHUB_OUTPUT
+          echo "failed_services=$failed_services" >> $GITHUB_OUTPUT
+
+      - name: Slack — Tests Passed
+        if: steps.results.outputs.all_passed == 'true'
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": ":white_check_mark: *All tests passed!*\n*Repo:* ${{ github.repository }}\n*Branch:* `${{ github.ref_name }}`\n*Commit by:* ${{ github.actor }}\n*Message:* ${{ github.event.head_commit.message }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Slack — Tests FAILED
+        if: steps.results.outputs.all_passed == 'false'
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": ":x: *Tests FAILED — deployment blocked*\n*Repo:* ${{ github.repository }}\n*Branch:* `${{ github.ref_name }}`\n*Failed:* `${{ steps.results.outputs.failed_services }}`\n*Triggered by:* ${{ github.actor }}\n*Logs:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # ─── Build & Push to ECR ──────────────────────────────────────────────────────
+  build-and-push:
+    name: 🐳 Build & Push — ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, test-product, test-cart, test-order, test-payment]
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      needs.test-product.result != 'failure' &&
+      needs.test-cart.result != 'failure' &&
+      needs.test-order.result != 'failure' &&
+      needs.test-payment.result != 'failure'
+    strategy:
+      matrix:
+        include:
+          - service: product-service
+          - service: cart-service
+          - service: order-service
+          - service: payment-service
+          - service: api-gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: tag
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          echo "tag=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "image=${{ env.ECR_REGISTRY }}/shopwave/${{ matrix.service }}:$SHORT_SHA" >> $GITHUB_OUTPUT
+
+      - name: Create ECR repo if not exists
+        run: |
+          aws ecr describe-repositories \
+            --repository-names shopwave/${{ matrix.service }} \
+            --region ${{ env.AWS_REGION }} || \
+          aws ecr create-repository \
+            --repository-name shopwave/${{ matrix.service }} \
+            --image-scanning-configuration scanOnPush=true \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Build and push Docker image
+        run: |
+          docker build \
+            -t ${{ steps.tag.outputs.image }} \
+            -t ${{ env.ECR_REGISTRY }}/shopwave/${{ matrix.service }}:latest \
+            ./services/${{ matrix.service }}
+
+          docker push ${{ steps.tag.outputs.image }}
+          docker push ${{ env.ECR_REGISTRY }}/shopwave/${{ matrix.service }}:latest
+
+          echo "${{ steps.tag.outputs.tag }}" > /tmp/${{ matrix.service }}-tag.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-tag-${{ matrix.service }}
+          path: /tmp/${{ matrix.service }}-tag.txt
+
+  # ─── Update K8s manifests ────────────────────────────────────────────────────
+  update-manifests:
+    name: 📝 Update K8s Manifests
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "ShopWave CI Bot"
+          git config user.email "ci-bot@shopwave.io"
+
+      - name: Update image tags in manifests
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}
+          REGION=${{ env.AWS_REGION }}
+          REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
+
+          for svc in product-service cart-service order-service payment-service; do
+            svc_short=$(echo $svc | sed 's/-service//')
+            manifest="k8s/base/${svc_short}-svc/deployment.yaml"
+            if [ -f "$manifest" ]; then
+              sed -i "s|IMAGE_TAG|${SHORT_SHA}|g" "$manifest"
+              sed -i "s|ACCOUNT_ID|${ACCOUNT_ID}|g" "$manifest"
+              echo "Updated $manifest → tag: $SHORT_SHA"
+            fi
+          done
+
+          manifest="k8s/base/gateway-svc/deployment.yaml"
+          if [ -f "$manifest" ]; then
+            sed -i "s|IMAGE_TAG|${SHORT_SHA}|g" "$manifest"
+            sed -i "s|ACCOUNT_ID|${ACCOUNT_ID}|g" "$manifest"
+            echo "Updated $manifest → tag: $SHORT_SHA"
+          fi
+
+      - name: Commit and push
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          git add k8s/
+          git diff --staged --quiet || git commit -m "ci: update image tags to ${SHORT_SHA} [skip ci]"
+          git push
+
+  # ─── Notify deployment result ─────────────────────────────────────────────────
+  notify-deployment:
+    name: 📣 Slack — Deployment Result
+    runs-on: ubuntu-latest
+    needs: update-manifests
+    if: always() && github.ref == 'refs/heads/main'
+    steps:
+      - name: Slack — Deployment Triggered
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": ":rocket: *Deployment triggered!*\n*Repo:* ${{ github.repository }}\n*Branch:* `${{ github.ref_name }}`\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Message:* ${{ github.event.head_commit.message }}\n*ArgoCD is syncing — check:* ${{ secrets.ARGOCD_SERVER }}\n*Workflow:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

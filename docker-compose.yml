@@ -1,0 +1,27 @@
+version: '3.9'
+services:
+  product-service:
+    build: ./services/product-service
+    ports: ["8001:8000"]
+  cart-service:
+    build: ./services/cart-service
+    ports: ["8002:8000"]
+    environment:
+      PRODUCT_SERVICE_URL: http://product-service:8000
+  order-service:
+    build: ./services/order-service
+    ports: ["8003:8000"]
+    environment:
+      PRODUCT_SERVICE_URL: http://product-service:8000
+      PAYMENT_SERVICE_URL: http://payment-service:8000
+  payment-service:
+    build: ./services/payment-service
+    ports: ["8004:8000"]
+  api-gateway:
+    build: ./services/api-gateway
+    ports: ["8000:8000"]
+    environment:
+      PRODUCT_SERVICE_URL: http://product-service:8000
+      CART_SERVICE_URL: http://cart-service:8000
+      ORDER_SERVICE_URL: http://order-service:8000
+      PAYMENT_SERVICE_URL: http://payment-service:8000

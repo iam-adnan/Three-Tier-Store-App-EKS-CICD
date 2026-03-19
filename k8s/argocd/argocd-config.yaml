@@ -1,0 +1,129 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: shopwave
+  namespace: argocd
+spec:
+  description: ShopWave e-commerce microservices platform
+
+  sourceRepos:
+    - https://github.com/iam-adnan/Three-Tier-Store-App-EKS-CICD
+
+  destinations:
+    - namespace: shopwave
+      server: https://kubernetes.default.svc
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+
+  namespaceResourceWhitelist:
+    - group: "apps"
+      kind: Deployment
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: ServiceAccount
+    - group: "autoscaling"
+      kind: HorizontalPodAutoscaler
+    - group: "networking.istio.io"
+      kind: VirtualService
+    - group: "networking.istio.io"
+      kind: DestinationRule
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+  namespace: argocd
+data:
+  trigger.on-sync-succeeded: |
+    - when: app.status.operationState.phase in ['Succeeded']
+      send: [slack-sync-succeeded]
+
+  trigger.on-sync-failed: |
+    - when: app.status.operationState.phase in ['Error', 'Failed']
+      send: [slack-sync-failed]
+
+  trigger.on-health-degraded: |
+    - when: app.status.health.status == 'Degraded'
+      send: [slack-health-degraded]
+
+  template.slack-sync-succeeded: |
+    message: |
+      :white_check_mark: *Deployment Succeeded*
+      *App:* {{ .app.metadata.name }}
+      *Revision:* {{ .app.status.sync.revision }}
+      *Namespace:* {{ .app.spec.destination.namespace }}
+    slack:
+      attachments: |
+        [{
+          "color": "#2eb67d",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": ":rocket: *{{ .app.metadata.name }}* deployed successfully!\n*Namespace:* {{ .app.spec.destination.namespace }}"
+              }
+            }
+          ]
+        }]
+
+  template.slack-sync-failed: |
+    message: |
+      :x: *Deployment FAILED*
+      *App:* {{ .app.metadata.name }}
+      *Error:* {{ .app.status.operationState.message }}
+    slack:
+      attachments: |
+        [{
+          "color": "#e01e5a",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": ":fire: *{{ .app.metadata.name }}* deployment *FAILED*\n*Reason:* {{ .app.status.operationState.message }}"
+              }
+            }
+          ]
+        }]
+
+  template.slack-health-degraded: |
+    message: |
+      :warning: *App Health Degraded*
+      *App:* {{ .app.metadata.name }}
+      *Status:* {{ .app.status.health.status }}
+    slack:
+      attachments: |
+        [{
+          "color": "#ecb22e",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": ":warning: *{{ .app.metadata.name }}* health is *{{ .app.status.health.status }}*"
+              }
+            }
+          ]
+        }]
+
+  service.slack: |
+    token: $slack-token
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argocd-notifications-secret
+  namespace: argocd
+type: Opaque
+stringData:

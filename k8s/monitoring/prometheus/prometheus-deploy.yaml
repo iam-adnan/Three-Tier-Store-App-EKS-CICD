@@ -1,0 +1,248 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus-sa
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.48.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=15d"
+            - "--web.enable-lifecycle"
+            - "--web.enable-admin-api"
+          ports:
+            - containerPort: 9090
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: rules
+              mountPath: /etc/prometheus/rules
+            - name: storage
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: rules
+          configMap:
+            name: prometheus-config
+        - name: storage
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+  type: ClusterIP
+
+---
+# Alertmanager — routes alerts to Slack
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+      slack_api_url: 'YOUR_SLACK_WEBHOOK_URL'
+
+    route:
+      group_by: ['alertname', 'service', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: slack-critical
+
+      routes:
+        - match:
+            severity: critical
+          receiver: slack-critical
+          continue: true
+
+        - match:
+            severity: warning
+          receiver: slack-warnings
+          group_wait: 5m
+
+        - match:
+            team: payments
+          receiver: slack-payments
+
+    receivers:
+      - name: slack-critical
+        slack_configs:
+          - channel: '#alerts-critical'
+            send_resolved: true
+            icon_emoji: ':fire:'
+            username: 'ShopWave Alerts'
+            title: '{{ if eq .Status "firing" }}:red_circle: ALERT FIRING{{ else }}:large_green_circle: RESOLVED{{ end }}: {{ .CommonLabels.alertname }}'
+            text: |
+              {{ range .Alerts }}
+              *Service:* {{ .Labels.service }}
+              *Severity:* {{ .Labels.severity }}
+              *Summary:* {{ .Annotations.summary }}
+              *Description:* {{ .Annotations.description }}
+              {{ if .Annotations.runbook }}*Runbook:* {{ .Annotations.runbook }}{{ end }}
+              *Started:* {{ .StartsAt | humanizeTimestamp }}
+              {{ end }}
+            actions:
+              - type: button
+                text: 'View in Grafana'
+                url: 'https://grafana.shopwave.io/d/shopwave-overview'
+              - type: button
+                text: 'View in ArgoCD'
+                url: 'https://argocd.shopwave.io'
+
+      - name: slack-warnings
+        slack_configs:
+          - channel: '#alerts-warnings'
+            send_resolved: true
+            icon_emoji: ':warning:'
+            username: 'ShopWave Alerts'
+            title: ':warning: {{ .CommonLabels.alertname }}'
+            text: |
+              {{ range .Alerts }}
+              *Service:* {{ .Labels.service }}
+              *Summary:* {{ .Annotations.summary }}
+              {{ end }}
+
+      - name: slack-payments
+        slack_configs:
+          - channel: '#alerts-payments'
+            send_resolved: true
+            icon_emoji: ':credit_card:'
+            username: 'ShopWave Payments'
+            title: '{{ .CommonLabels.alertname }}'
+            text: |
+              {{ range .Alerts }}
+              {{ .Annotations.description }}
+              {{ end }}
+
+    inhibit_rules:
+      - source_match:
+          severity: critical
+        target_match:
+          severity: warning
+        equal: ['service']
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.26.0
+          args:
+            - "--config.file=/etc/alertmanager/alertmanager.yml"
+            - "--storage.path=/alertmanager"
+          ports:
+            - containerPort: 9093
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+spec:
+  selector:
+    app: alertmanager
+  ports:
+    - port: 9093
+      targetPort: 9093
+
+---
+# RBAC for Prometheus to discover pods/services
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus-sa
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-role
+rules:
+  - apiGroups: [""]
+    resources: [nodes, nodes/proxy, services, endpoints, pods]
+    verbs: [get, list, watch]
+  - apiGroups: [extensions, networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-role
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-sa
+    namespace: monitoring

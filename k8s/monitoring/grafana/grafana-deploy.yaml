@@ -1,0 +1,218 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.2.0
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secret
+                  key: admin-password
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_SERVER_DOMAIN
+              value: "grafana.shopwave.io"
+            - name: GF_INSTALL_PLUGINS
+              value: "grafana-piechart-panel,grafana-clock-panel"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-secret
+  namespace: monitoring
+type: Opaque
+stringData:
+  admin-password: "CHANGE_ME_IN_PRODUCTION"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus:9090
+        isDefault: true
+        access: proxy
+        jsonData:
+          timeInterval: "15s"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: monitoring
+data:
+  provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: shopwave-dashboards
+        folder: ShopWave
+        type: file
+        options:
+          path: /var/lib/grafana/dashboards
+
+---
+# Main ShopWave Grafana Dashboard
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+data:
+  shopwave-overview.json: |
+    {
+      "id": null,
+      "uid": "shopwave-overview",
+      "title": "ShopWave — Platform Overview",
+      "tags": ["shopwave", "microservices"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": {"from": "now-1h", "to": "now"},
+      "panels": [
+        {
+          "id": 1,
+          "title": "Request Rate (req/s)",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [{
+            "expr": "sum(rate(http_requests_total{job='shopwave-services'}[5m])) by (service)",
+            "legendFormat": "{{service}}"
+          }],
+          "yaxes": [{"label": "req/s", "min": 0}]
+        },
+        {
+          "id": 2,
+          "title": "Error Rate (%)",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [{
+            "expr": "100 * sum(rate(http_requests_total{status=~'5..',job='shopwave-services'}[5m])) by (service) / sum(rate(http_requests_total{job='shopwave-services'}[5m])) by (service)",
+            "legendFormat": "{{service}}"
+          }],
+          "yaxes": [{"label": "%", "min": 0, "max": 100}],
+          "thresholds": [{"value": 5, "colorMode": "critical", "op": "gt"}]
+        },
+        {
+          "id": 3,
+          "title": "p95 Latency (seconds)",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [{
+            "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job='shopwave-services'}[5m])) by (le, service))",
+            "legendFormat": "{{service}} p95"
+          }],
+          "yaxes": [{"label": "seconds", "min": 0}]
+        },
+        {
+          "id": 4,
+          "title": "Pod Count per Service",
+          "type": "stat",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [{
+            "expr": "count(kube_pod_status_ready{namespace='shopwave',condition='true'} == 1) by (pod)",
+            "legendFormat": "{{pod}}"
+          }]
+        },
+        {
+          "id": 5,
+          "title": "CPU Usage per Service",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+          "targets": [{
+            "expr": "sum(rate(container_cpu_usage_seconds_total{namespace='shopwave'}[5m])) by (pod)",
+            "legendFormat": "{{pod}}"
+          }],
+          "yaxes": [{"label": "cores", "min": 0}]
+        },
+        {
+          "id": 6,
+          "title": "Memory Usage per Service",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+          "targets": [{
+            "expr": "sum(container_memory_usage_bytes{namespace='shopwave'}) by (pod) / 1024 / 1024",
+            "legendFormat": "{{pod}}"
+          }],
+          "yaxes": [{"label": "MB", "min": 0}]
+        },
+        {
+          "id": 7,
+          "title": "HPA Replica Count",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+          "targets": [
+            {
+              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace='shopwave'}",
+              "legendFormat": "{{horizontalpodautoscaler}} current"
+            },
+            {
+              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace='shopwave'}",
+              "legendFormat": "{{horizontalpodautoscaler}} max"
+            }
+          ]
+        }
+      ]
+    }
